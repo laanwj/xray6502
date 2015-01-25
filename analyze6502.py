@@ -110,6 +110,8 @@ NODE_UNDEFINED = 16
 
 TRANS_DUPLICATE = 1
 
+layer_names = ['metal', 'switched diffusion', 'inputdiode', 'grounded diffusion', 'powered diffusion', 'polysilicon']
+
 class Node:
     def __init__(self, i, d):
         self.id = i
@@ -309,16 +311,16 @@ def main():
     '''
     all_nodes = set(x.id for x in c.node if not x.flags & (NODE_UNDEFINED|NODE_GND|NODE_PWR))
     groups = 0
-    inverters = 0
-    nor_gates = 0
     group_max_nodes = 0
     group_max_inputs = 0
     group_max_outputs = 0
+    group_type_counts = defaultdict(int)
     print()
     while all_nodes:
         x = all_nodes.pop()
         (v_node, v_trans) = find_connected_components(c, c.node[x], 6)
         flags = ''
+        groupid = sorted(v_node)[0]
         # determine input gates and outputs connected to gates
         inputs = set()
         outputs = set()
@@ -329,67 +331,91 @@ def main():
                 outputs.add(n)
         inouts = inputs.intersection(outputs)
 
-        groupid = sorted(v_node)[0]
-        print('Group %04i %s (%i nodes, %i inputs, %i outputs, %i inouts)' % (groupid,flags,len(v_node),len(inputs),len(outputs),len(inouts)))
-        print('  Inputs: %s' % (' '.join(('%04i'%x) for x in inputs)))
-        print('  Outputs: %s' % (' '.join(('%04i'%x) for x in outputs)))
+        # classify group
+        is_pure_op = True
+        is_sink = (len(outputs)==0)
         for n in v_node:
-            nflags = ''
             node = c.node[n]
-            if node.flags & NODE_PULLUP:
-                nflags += '+'
-            else:
-                nflags += ' '
-            if node.flags & NODE_PULLDOWN:
-                nflags += '-'
-            else:
-                nflags += ' '
-            if node.gates:
-                nflags += 'G'
-            else:
-                nflags += ' '
-            if n in inputs:
-                nflags += 'I'
-            else:
-                nflags += ' '
+            # if this is an output, but it is not pulled up or down,
+            # this contains memory and is not a pure logic element
+            if node.gates and not node.flags & (NODE_PULLUP | NODE_PULLDOWN):
+                is_pure_op = False
 
-            c1c2s = []
-            for y,x in node.sibs:
-                if x == c.gnd:
-                    c1c2s.append('GND ')
-                elif x == c.pwr:
-                    c1c2s.append('PWR ')
+        gtype = 'unk'
+        if is_sink:
+            gtype = 'sink' # pins and such, no outputs
+        elif is_pure_op:
+            gtype = 'op'
+            if len(v_node) == 1:
+                # TODO: check all inputs are GND
+                if len(inputs) == 1:
+                    gtype = 'inv'
                 else:
-                    c1c2s.append('%04i' % (x))
-            if node.name:
-                name = node.name[0:5]
-            else:
-                name = ''
-            print('  %04i(%-5s) %s %s' % (n,name,nflags,' '.join(c1c2s)))
-        #print(flags, v_node)
+                    gtype = 'nor'
+
+        show = True
+        if show:
+            print('Group %04i %s (%i nodes, %i inputs, %i outputs, %i inouts, %s)' % (
+                groupid,flags,len(v_node),len(inputs),len(outputs),len(inouts), ['impure', 'pure'][is_pure_op]))
+            print('  Inputs: %s' % (' '.join(('%04i'%x) for x in inputs)))
+            print('  Outputs: %s' % (' '.join(('%04i'%x) for x in outputs)))
+            print('  URI: find=%s' % (','.join(('%i'%x) for x in v_node)))
+            for n in v_node:
+                nflags = ''
+                node = c.node[n]
+                if node.flags & NODE_PULLUP:
+                    nflags += '+'
+                else:
+                    nflags += ' '
+                if node.flags & NODE_PULLDOWN:
+                    nflags += '-'
+                else:
+                    nflags += ' '
+                if node.gates:
+                    nflags += 'G'
+                else:
+                    nflags += ' '
+                if n in inputs:
+                    nflags += 'I'
+                else:
+                    nflags += ' '
+
+                c1c2s = []
+                for y,x in node.sibs:
+                    if x == c.gnd:
+                        c1c2s.append('GND ')
+                    elif x == c.pwr:
+                        c1c2s.append('PWR ')
+                    else:
+                        c1c2s.append('%04i' % (x))
+                if node.name:
+                    name = node.name[0:5]
+                else:
+                    name = ''
+                print('  %04i(%-5s) %s %s' % (n,name,nflags,' '.join(c1c2s)))
+            print()
 
         # statistics
-        if len(v_node) == 1 and c.node[list(v_node)[0]].flags == NODE_PULLUP:
-            # TODO: check all inputs are GND
-            if len(inputs) == 1:
-                inverters += 1
-            else:
-                nor_gates += 1
         group_max_nodes = max(group_max_nodes, len(v_node))
         group_max_inputs = max(group_max_inputs, len(inputs))
         group_max_outputs = max(group_max_outputs, len(outputs))
+        group_type_counts[gtype] += 1
 
         all_nodes -= v_node
         groups += 1
-        print()
 
     print("%i separate groups" % (groups))
-    print("of which %i inverters" % (inverters))
-    print("of which %i nor gates" % (nor_gates))
-    print("of which %i other" % (groups - inverters - nor_gates))
+    print("of which %i inverters" % (group_type_counts['inv']))
+    print("of which %i nor gates" % (group_type_counts['nor']))
+    print("of which %i sinks" % (group_type_counts['sink']))
+    print("of which %i other pure" % (group_type_counts['op']))
+    print("of which %i other impure" % (group_type_counts['unk']))
     print("largest group has %i nodes" % (group_max_nodes))
     print("largest number of inputs is %i" % (group_max_inputs))
     print("largest number of outputs is %i" % (group_max_outputs))
+
+    state_nodes = set(x.id for x in c.node if not x.flags & (NODE_UNDEFINED|NODE_GND|NODE_PWR|NODE_PULLUP|NODE_PULLDOWN))
+    print("number of state nodes %i" % (len(state_nodes)))
 
 
 if __name__ == '__main__':
