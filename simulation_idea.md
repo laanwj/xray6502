@@ -77,4 +77,98 @@ To combine blocks:
   merge these nodes
   keep track of which nodes are merged
 
+# simple 'incremental state machine' sim:
+#   four state logic (0=lo, 1=hi, 2=float_lo, 3=float_hi): min(A,B)
+#
+# w/ AND
+#   000 lo
+#   001 hi
+#   011 float_lo
+#   111 float_hi
+#
+#   need to propagate float_lo/float_hi but only when lo/hi is not asserted
+#   (e.g. when no lo or hi is coming in via any path)
+#   are transistors oriented? does it matter which side (c1,c2) is high and low? NO
+#   if connected to group that has lo/hi (we know where these can flow in)
+#
+#   *if in any of the active group*:
+#     pull-up causes hi 
+#     PWR causes hi
+#     pull-down causes lo
+#     GND causes lo
+#     otherwise: float state
+#
+#   A&B
+#   pull-up and pull-down nodes can only be lo or hi, not float
+#
+#   also need a 'changed' bit, to detect when to recompute?
+#
+#   for every transistor, if enabled: diffuse
+#
+#      active[c1] = active[c2] = min(active[c1],active[c2],boundary[c1],boundary[c2])
+#
+#   boundary conditions (e.g, vcc, gnd, pullup, pulldown cannot change, will always return same, and
+#     bound the state value at the top)
+#
+#   if transistor gate value changes, add it to work list
+#   if transistor c1 value changes, add it to work list
+#   if transistor c2 value changes, add it to work list
+#
+#  'transistor switching off' is the difficult case because it can create two isolated islands
+#  entire group needs recomputation
+#    set 'reset bit' for node c1 and c2 of transistor
+#    this bit propagates over diffusion boundaries every step, and resets the state to 'float hi' or 'float lo',
+#      then clears the reset bit again
+#
+#  Diffusion algorithm:
+#      if nodeState[c1] & RESET:
+#          nodeState[c2] |= RESET
+#          nodeState]c1] &= RESET
+#          nodeState]c1] &= ASSERTED
+#      else if nodeState[c2] & RESET:
+#          nodeState[c1] |= RESET
+#          nodeState]c2] &= RESET
+#          nodeState]c1] &= ASSERTED
+#      if (nodeState[c1] & ASSERTED) and (nodeState[c2] & ASSERTED):
+#          nodeState[c1] = 
+#
+# Per-group simulation ('bounding groups')
+#   - sort nodes per group
+#   - have bitfields per group
+#     - e.g., nodes_pullup, nodes_pulldown, nodes_value
+#     - VSS and VCC could be replicated per group
+#   - group inputs: gates that control subdivision
+#   - group outputs: inputs (other transistor gates) controlled by this group
+
+#   - nodeGroup(n, nodesActive, siblings) = [n] ∪ [nodeGroup(x) if nodesActive[y] for x,y in siblings[n]]
+#
+#         siblings is constant throughout the simulation
+#         nodesActive is variable - only node values inside siblings[n] for the bounding group are queried
+#
+#     nodeGroup(gnd) = [gnd]
+#
+#     nodeGroup(pwr) = [pwr]
+#
+#     nodeValue(n, nodesPullDown, nodesPullUp, nodesActive) = 
+#         | contains_vss if n = vss
+#         | contains_vcc if n = vcc
+#         | contains_pulldown if n in nodesPullDown
+#         | contains_pullup if n in nodesPullUp
+#         | contains_hi if n in nodesActive
+#         | contains_nothing
+#
+#     groupContains(g, nodesPullDown, nodesPullUp, nodesActive) = min x: nodeValue(x, nodesPullDown, nodesPullUp, nodesActive) for x in in g
+#
+#     groupValue(x) = 
+#         | 0 if x = contains_vss
+#         | 1 if x = contains_vcc
+#         | 0 if x = contains_pulldown
+#         | 1 if x = contains_pullup
+#         | 0 if x = contains_nothing
+#         | 1 if x = contains_hi
+#
+#  Update:
+#
+#     nodesActive[g] = groupValue(groupContains(g, nodesPullDown, nodesPullUp, nodesActive))
+
 

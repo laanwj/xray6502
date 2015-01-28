@@ -8,100 +8,6 @@ import json
 import sys
 from collections import defaultdict
 
-# simple 'incremental state machine' sim:
-#   four state logic (0=lo, 1=hi, 2=float_lo, 3=float_hi): min(A,B)
-#
-# w/ AND
-#   000 lo
-#   001 hi
-#   011 float_lo
-#   111 float_hi
-#
-#   need to propagate float_lo/float_hi but only when lo/hi is not asserted
-#   (e.g. when no lo or hi is coming in via any path)
-#   are transistors oriented? does it matter which side (c1,c2) is high and low? NO
-#   if connected to group that has lo/hi (we know where these can flow in)
-#
-#   *if in any of the active group*:
-#     pull-up causes hi 
-#     PWR causes hi
-#     pull-down causes lo
-#     GND causes lo
-#     otherwise: float state
-#
-#   A&B
-#   pull-up and pull-down nodes can only be lo or hi, not float
-#
-#   also need a 'changed' bit, to detect when to recompute?
-#
-#   for every transistor, if enabled: diffuse
-#
-#      active[c1] = active[c2] = min(active[c1],active[c2],boundary[c1],boundary[c2])
-#
-#   boundary conditions (e.g, vcc, gnd, pullup, pulldown cannot change, will always return same, and
-#     bound the state value at the top)
-#
-#   if transistor gate value changes, add it to work list
-#   if transistor c1 value changes, add it to work list
-#   if transistor c2 value changes, add it to work list
-#
-#  'transistor switching off' is the difficult case because it can create two isolated islands
-#  entire group needs recomputation
-#    set 'reset bit' for node c1 and c2 of transistor
-#    this bit propagates over diffusion boundaries every step, and resets the state to 'float hi' or 'float lo',
-#      then clears the reset bit again
-#
-#  Diffusion algorithm:
-#      if nodeState[c1] & RESET:
-#          nodeState[c2] |= RESET
-#          nodeState]c1] &= RESET
-#          nodeState]c1] &= ASSERTED
-#      else if nodeState[c2] & RESET:
-#          nodeState[c1] |= RESET
-#          nodeState]c2] &= RESET
-#          nodeState]c1] &= ASSERTED
-#      if (nodeState[c1] & ASSERTED) and (nodeState[c2] & ASSERTED):
-#          nodeState[c1] = 
-#
-# Per-group simulation ('bounding groups')
-#   - sort nodes per group
-#   - have bitfields per group
-#     - e.g., nodes_pullup, nodes_pulldown, nodes_value
-#     - VSS and VCC could be replicated per group
-#   - group inputs: gates that control subdivision
-#   - group outputs: inputs (other transistor gates) controlled by this group
-
-#   - nodeGroup(n, nodesActive, siblings) = [n] ∪ [nodeGroup(x) if nodesActive[y] for x,y in siblings[n]]
-#
-#         siblings is constant throughout the simulation
-#         nodesActive is variable - only node values inside siblings[n] for the bounding group are queried
-#
-#     nodeGroup(gnd) = [gnd]
-#
-#     nodeGroup(pwr) = [pwr]
-#
-#     nodeValue(n, nodesPullDown, nodesPullUp, nodesActive) = 
-#         | contains_vss if n = vss
-#         | contains_vcc if n = vcc
-#         | contains_pulldown if n in nodesPullDown
-#         | contains_pullup if n in nodesPullUp
-#         | contains_hi if n in nodesActive
-#         | contains_nothing
-#
-#     groupContains(g, nodesPullDown, nodesPullUp, nodesActive) = min x: nodeValue(x, nodesPullDown, nodesPullUp, nodesActive) for x in in g
-#
-#     groupValue(x) = 
-#         | 0 if x = contains_vss
-#         | 1 if x = contains_vcc
-#         | 0 if x = contains_pulldown
-#         | 1 if x = contains_pullup
-#         | 0 if x = contains_nothing
-#         | 1 if x = contains_hi
-#
-#  Update:
-#
-#     nodesActive[g] = groupValue(groupContains(g, nodesPullDown, nodesPullUp, nodesActive))
-
 NODE_PULLUP = 1
 NODE_PULLDOWN = 2
 NODE_GND = 4
@@ -271,6 +177,47 @@ def find_connected_components(c, obj, bits=7):
             raise ValueError
     return (v_node, v_trans)
 
+class ExprNode(object):
+    pass
+
+class AndNode(ExprNode):
+    def __init__(self, children):
+        self.children = children
+    def __repr__(self):
+        return '(' + ('&&'.join(repr(x) for x in self.children)) + ')'
+
+class OrNode(ExprNode):
+    def __init__(self, children):
+        self.children = children
+    def __repr__(self):
+        return '(' + ('||'.join(repr(x) for x in self.children)) + ')'
+
+class NodeValNode(ExprNode):
+    def __init__(self, id):
+        self.id = id
+    def __repr__(self):
+        return 'get_nodes_value(state, %i)' % (self.id)
+
+class InvertNode(ExprNode):
+    def __init__(self, c):
+        self.c = c
+    def __repr__(self):
+        return '!' + repr(self.c)
+
+def make_expr(c, out, parent):
+    terms = []
+    node = c.node[out]
+    for y,x in node.sibs:
+        if x == parent:
+            continue # backref
+        elif x == c.gnd:
+            terms.append(NodeValNode(y))
+        elif x == c.pwr:
+            assert(0)
+        else:
+            terms.append(AndNode([NodeValNode(y), make_expr(c, x, out)]))
+    return OrNode(terms)
+
 def main():
     c = load_circuit()
     '''
@@ -316,6 +263,8 @@ def main():
     group_max_outputs = 0
     group_type_counts = defaultdict(int)
     print()
+    to_compute = defaultdict(int)
+    to_compute_by_group = defaultdict(int)
     while all_nodes:
         x = all_nodes.pop()
         (v_node, v_trans) = find_connected_components(c, c.node[x], 6)
@@ -334,6 +283,7 @@ def main():
         # classify group
         is_pure_op = True
         is_sink = (len(outputs)==0)
+        is_source = (len(inputs)==0)
         for n in v_node:
             node = c.node[n]
             # if this is an output, but it is not pulled up or down,
@@ -342,7 +292,9 @@ def main():
                 is_pure_op = False
 
         gtype = 'unk'
-        if is_sink:
+        if is_source:
+            gtype = 'source' # pins and such, no inputs
+        elif is_sink:
             gtype = 'sink' # pins and such, no outputs
         elif is_pure_op:
             gtype = 'op'
@@ -353,7 +305,7 @@ def main():
                 else:
                     gtype = 'nor'
 
-        show = True
+        show = False
         if show:
             print('Group %04i %s (%i nodes, %i inputs, %i outputs, %i inouts, %s)' % (
                 groupid,flags,len(v_node),len(inputs),len(outputs),len(inouts), ['impure', 'pure'][is_pure_op]))
@@ -383,17 +335,31 @@ def main():
                 c1c2s = []
                 for y,x in node.sibs:
                     if x == c.gnd:
-                        c1c2s.append('GND ')
+                        c1c2s.append('GND[%04i] '% (y))
                     elif x == c.pwr:
-                        c1c2s.append('PWR ')
+                        c1c2s.append('PWR[%04i] '% (y))
                     else:
-                        c1c2s.append('%04i' % (x))
+                        c1c2s.append('%04i[%04i]' % (x,y))
                 if node.name:
                     name = node.name[0:5]
                 else:
                     name = ''
                 print('  %04i(%-5s) %s %s' % (n,name,nflags,' '.join(c1c2s)))
             print()
+
+        # pure
+        if is_pure_op and len(outputs)==1:
+            # build expression
+            out = list(outputs)[0]
+            e = InvertNode(make_expr(c, out, -1))
+            print('case %i: return %s; break;' % (out, e))
+            to_compute[out] |= 1
+            for x in v_node:
+                to_compute_by_group[x] = out
+                to_compute[x] |= 4
+        else:
+            for x in v_node:
+                to_compute[x] |= 2
 
         # statistics
         group_max_nodes = max(group_max_nodes, len(v_node))
@@ -408,6 +374,7 @@ def main():
     print("of which %i inverters" % (group_type_counts['inv']))
     print("of which %i nor gates" % (group_type_counts['nor']))
     print("of which %i sinks" % (group_type_counts['sink']))
+    print("of which %i sources" % (group_type_counts['source']))
     print("of which %i other pure" % (group_type_counts['op']))
     print("of which %i other impure" % (group_type_counts['unk']))
     print("largest group has %i nodes" % (group_max_nodes))
@@ -417,6 +384,16 @@ def main():
     state_nodes = set(x.id for x in c.node if not x.flags & (NODE_UNDEFINED|NODE_GND|NODE_PWR|NODE_PULLUP|NODE_PULLDOWN))
     print("number of state nodes %i" % (len(state_nodes)))
 
+    sout = [to_compute[n] for n in range(len(c.node))]
+    print('const char to_simulate[%i] = {%s};' %
+            (len(c.node), (','.join(str(x) for x in sout))))
+
+    sout = [to_compute_by_group[n] for n in range(len(c.node))]
+    print('const int to_compute_by_group[%i] = {%s};' %
+            (len(c.node), (','.join(str(x) for x in sout))))
+
+    # TODO: could combine multiple digital groups if their result is not used outside it,
+    # and not an external pin
 
 if __name__ == '__main__':
     main()
