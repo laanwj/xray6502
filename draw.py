@@ -21,14 +21,15 @@ TRANS_DUPLICATE = 1
 
 grChipSize = 10000
 layer_names = ['metal', 'switched diffusion', 'inputdiode', 'grounded diffusion', 'powered diffusion', 'polysilicon']
+NUM_LAYERS = 6
 layer_colors = [
-        (0.5,0.5,0.75,0.4),
-        (1.0,1.0,0,1.0),
-        (1.0,0.0,1.0,1.0),
-        (0.3,1.0,0.3,1.0), 
-        (1.0, 0.3, 0.3,1.0), 
-        (0.5,0.1,0.75,1.0), 
-        (0.5,0.0,1.0,0.75)]
+        (0.5, 0.5, 0.75,0.4),
+        (1.0, 1.0, 0,   1.0),
+        (1.0, 0.0, 1.0, 1.0),
+        (0.3, 1.0, 0.3, 1.0), 
+        (1.0, 0.3, 0.3, 1.0), 
+        (0.5, 0.1, 0.75,1.0), 
+        (0.5, 0.0, 1.0, 0.75)]
 HITBUFFER_W = 600
 HITBUFFER_H = 600
 INITIAL_SCALE = 600
@@ -126,36 +127,6 @@ def load_circuit():
 
     return Circuit(nodedefs, transdefs, dict(segdefs_out), nodenames['vss'], nodenames['vcc'])
 
-def find_connected_components(c, obj, bits=7):
-    worklist = [obj]
-    v_node = set()
-    v_trans = set()
-    while worklist:
-        item = worklist.pop()
-        if isinstance(item, Transistor):
-            if item.id in v_trans:
-                continue
-            v_trans.add(item.id)
-            if bits & 1:
-                worklist.append(c.node[item.gate])
-            if bits & 2:
-                worklist.append(c.node[item.c1])
-            if bits & 4:
-                worklist.append(c.node[item.c2])
-        elif isinstance(item, Node):
-            assert(not (item.flags & NODE_UNDEFINED))
-            if item.id in v_node or item.flags & (NODE_GND|NODE_PWR):
-                continue
-            v_node.add(item.id)
-            if bits & 1:
-                worklist.extend([c.trans[t] for t in item.gates])
-            if bits & 6:
-                worklist.extend([c.trans[t] for t in item.c1s])
-                worklist.extend([c.trans[t] for t in item.c2s])
-        else:
-            raise ValueError
-    return (v_node, v_trans)
-
 def draw_segs(cr, seg):
     cr.move_to(seg[1], seg[2])
     for i in range(3, len(seg), 2):
@@ -173,14 +144,6 @@ class SelBox(object):
 
     def intersects(self, x, y):
         return self.x1 <= x < self.x2 and self.y1 <= y < self.y2
-
-def show_node_text(cr, node):
-    '''Show text and return a selection box'''
-    cpt = cr.get_current_point()
-    text = '%d ' % node
-    cr.show_text(text)
-    extents = cr.text_extents(text)
-    return SelBox(cpt, extents, node)
 
 class MouseButtons:
     LEFT_BUTTON = 1
@@ -212,6 +175,13 @@ class ChipVisualizer(Gtk.Window):
         self.ibx = self.width - self.ibw - 5
         self.iby = 5
         self.infobox_mapping = []
+
+        # sort segment per layer, for background drawing
+        self.cached_layer_path = None
+        self.segs_by_layer = [[] for x in range(NUM_LAYERS)]
+        for node,polys in self.c.seg.items():
+            for seg in polys:
+                self.segs_by_layer[seg[0]].append(seg)
         
     def init_ui(self):    
         self.darea = Gtk.DrawingArea()
@@ -231,11 +201,31 @@ class ChipVisualizer(Gtk.Window):
         self.connect("key-press-event", self.on_key_press)
         self.show_all()
 
-    def draw_layer(self, cr, layer):
-        for node,polys in self.c.seg.items():
-            for seg in polys:
-                if seg[0] == layer:
+    def draw_background(self, cr):
+        cr.push_group()
+        cr.set_line_width(4.0)
+        cr.translate(-self.ofs[0], -self.ofs[1])
+        cr.scale(self.scale / grChipSize, -self.scale / grChipSize)
+        cr.translate(0, -grChipSize)
+
+        if self.cached_layer_path is None:
+            self.cached_layer_path = [None] * NUM_LAYERS
+            for c in range(NUM_LAYERS):
+                for seg in self.segs_by_layer[c]:
                     draw_segs(cr, seg)
+                self.cached_layer_path[c] = cr.copy_path()
+                cr.new_path()
+
+        for c in range(NUM_LAYERS):
+            #cr.set_source_rgba(*layer_colors[c])
+            cr.set_source_rgba(0.3,0.3,0.3,0.3)
+            cr.append_path(self.cached_layer_path[c])
+            if c == 0 or c == 6:
+                cr.fill_preserve()
+                cr.stroke()
+            else:
+                cr.fill()
+        self.background = cr.pop_group()
 
     def draw_selection(self, cr):
         cr.save()
@@ -248,15 +238,27 @@ class ChipVisualizer(Gtk.Window):
             draw_segs(cr, seg)
         cr.fill()
 
-        # local group ("side")
-        # mark rest of potential group (c1c2s)
         sel_node = self.c.node[self.selected]
-        (v_node, v_trans) = find_connected_components(self.c, sel_node, 6)
-        v_node.remove(self.selected)
-        cr.set_source_rgba(0.0,0.0,1.0,1.0)
+
+        v_node = set()
+        gated = set()
+        peers = set()
+        for t in sel_node.c1s:
+            v_node.add(self.c.trans[t].c2)
+            gated.add(self.c.trans[t].gate)
+            peers.add((self.c.trans[t].gate, self.c.trans[t].c2))
+        for t in sel_node.c2s:
+            v_node.add(self.c.trans[t].c1)
+            gated.add(self.c.trans[t].gate)
+            peers.add((self.c.trans[t].gate, self.c.trans[t].c1))
+        v_node -= {self.selected, self.c.pwr, self.c.gnd}
+        gated -= {self.selected, self.c.pwr, self.c.gnd}
+
+        # local group ("side")
         for node in v_node:
             for seg in self.c.seg[node]:
                 draw_segs(cr, seg)
+        cr.set_source_rgba(0.0,0.0,1.0,1.0)
         cr.fill()
 
         # direct influence ("downstream")
@@ -273,11 +275,6 @@ class ChipVisualizer(Gtk.Window):
         cr.fill()
 
         # influenced by ("upstream")
-        gated = set()
-        for t in itertools.chain(sel_node.c1s,sel_node.c2s):
-            gated.add(self.c.trans[t].gate)
-        gated -= {self.c.gnd, self.c.pwr}
-
         cr.set_source_rgba(0.25,0.25,1.0,1.0)
         for node in gated:
             for seg in self.c.seg[node]:
@@ -291,11 +288,30 @@ class ChipVisualizer(Gtk.Window):
         # which nodes are pulled-up (red) and which ones are pull-down (green) due to this node
         # direct influenced by
         cr.restore()
-        return {'v_node':v_node, 'gates':gates, 'gated':gated}
+        return {'v_node':v_node, 'gates':gates, 'gated':gated, 'peers':peers}
+
+    def show_node_text(self, cr, node):
+        '''Show text and return a selection box'''
+        cpt = cr.get_current_point()
+        if node == self.c.pwr:
+            cr.set_source_rgba(*layer_colors[4])
+            text = 'PWR '
+            node = None
+        elif node == self.c.gnd:
+            cr.set_source_rgba(*layer_colors[3])
+            text = 'GND '
+            node = None
+        else:
+            if node == self.highlighted:
+                cr.set_source_rgba(0.9,0.9,0.9,1.0)
+            text = '%d ' % node
+        cr.show_text(text)
+        extents = cr.text_extents(text)
+        return SelBox(cpt, extents, node)
 
     def draw_infobox(self, cr, info):
         cr.rectangle(self.ibx, self.iby, self.ibw, self.ibh)
-        cr.set_source_rgba(0.025, 0.025, 0.025, 0.95)
+        cr.set_source_rgba(0.025, 0.025, 0.025, 0.93)
         cr.fill()
 
         cr.select_font_face("Arial",
@@ -307,6 +323,7 @@ class ChipVisualizer(Gtk.Window):
         infoy = self.iby + 5 + 15
         ldist = 16
         base_color = (0.7,0.7,0.7)
+        hdr_color = (0.4,0.4,0.4)
         mapping = []
 
         if self.selected is not None:
@@ -315,80 +332,60 @@ class ChipVisualizer(Gtk.Window):
             cr.set_source_rgb(0.3, 1.0, 1.0)
             cr.show_text("Node %d " % self.selected)
             if sel_node.name is not None:
-                cr.set_source_rgb(base_color[0], base_color[1], base_color[2])
+                cr.set_source_rgb(*base_color)
                 cr.show_text(sel_node.name)
-            infoy += ldist*2
+            infoy += ldist*1.5
             cr.move_to(infox, infoy)
             if sel_node.flags & NODE_PULLDOWN:
-                cr.set_source_rgb(layer_colors[3][0], layer_colors[3][1], layer_colors[3][2])
+                cr.set_source_rgba(*layer_colors[3])
                 cr.show_text("pulldown ")
             if sel_node.flags & NODE_PULLUP:
-                cr.set_source_rgb(layer_colors[4][0], layer_colors[4][1], layer_colors[4][2])
+                cr.set_source_rgba(*layer_colors[4])
                 cr.show_text("pullup ")
 
-            infoy += ldist*2
+            infoy += ldist*1.5
             tb = infoy
+            cr.set_source_rgb(*hdr_color)
             cr.move_to(infox, infoy)
-            cr.set_source_rgb(base_color[0], base_color[1], base_color[2])
-            cr.show_text("Local group")
+            cr.show_text('Gated by ....................')
+            cr.move_to(infox + self.ibw/2, infoy)
+            cr.show_text('C1C2')
             infoy += ldist*1
-            for bnode in sorted(info['v_node']):
+            for (gnode,bnode) in sorted(info['peers']):
                 cr.move_to(infox, infoy)
-                if bnode == self.highlighted:
-                    cr.set_source_rgba(0.9,0.9,0.9,1.0)
-                else:
-                    cr.set_source_rgba(0.0,0.0,1.0,1.0)
-                mapping.append(show_node_text(cr, bnode))
+                cr.set_source_rgba(0.25,0.25,1.0,1.0)
+                mapping.append(self.show_node_text(cr, gnode))
+                if self.c.node[gnode].name is not None:
+                    cr.set_source_rgb(*base_color)
+                    cr.show_text(self.c.node[gnode].name)
+
+                cr.move_to(infox+self.ibw/2, infoy)
+                cr.set_source_rgba(0.0,0.0,1.0,1.0)
+                mapping.append(self.show_node_text(cr, bnode))
                 if self.c.node[bnode].name is not None:
-                    cr.set_source_rgb(base_color[0], base_color[1], base_color[2])
+                    cr.set_source_rgb(*base_color)
                     cr.show_text(self.c.node[bnode].name)
+
                 infoy += ldist*1
                 if infoy >= (self.iby+self.ibh):
                     break
-            yend = infoy
 
-            infoy = tb
-            infox += self.ibw/2
+            infoy += ldist*1
             cr.move_to(infox, infoy)
-            cr.set_source_rgb(base_color[0], base_color[1], base_color[2])
+            cr.set_source_rgb(hdr_color[0], hdr_color[1], hdr_color[2])
             cr.show_text("Gates")
             infoy += ldist*1
             cr.move_to(infox, infoy)
             for bnode in sorted(info['gates']):
                 cr.move_to(infox, infoy)
-                if bnode == self.highlighted:
-                    cr.set_source_rgba(0.9,0.9,0.9,1.0)
-                else:
-                    cr.set_source_rgba(0.0,0.5,1.0,1.0)
-                mapping.append(show_node_text(cr, bnode))
+                cr.set_source_rgba(0.0,0.5,1.0,1.0)
+                mapping.append(self.show_node_text(cr, bnode))
                 if self.c.node[bnode].name is not None:
-                    cr.set_source_rgb(base_color[0], base_color[1], base_color[2])
+                    cr.set_source_rgb(*base_color)
                     cr.show_text(self.c.node[bnode].name)
                 infoy += ldist*1
                 if infoy >= (self.iby+self.ibh):
                     break
-
-            if yend < (self.iby+self.ibh):
-                infox = self.ibx + 5
-                infoy = yend + ldist
-                cr.move_to(infox, infoy)
-                cr.set_source_rgb(base_color[0], base_color[1], base_color[2])
-                cr.show_text("Gated by")
-                infoy += ldist*1
-                cr.move_to(infox, infoy)
-                for bnode in sorted(info['gated']):
-                    cr.move_to(infox, infoy)
-                    if bnode == self.highlighted:
-                        cr.set_source_rgba(0.9,0.9,0.9,1.0)
-                    else:
-                        cr.set_source_rgba(0.25,0.25,1.0,1.0)
-                    mapping.append(show_node_text(cr, bnode))
-                    if self.c.node[bnode].name is not None:
-                        cr.set_source_rgb(base_color[0], base_color[1], base_color[2])
-                        cr.show_text(self.c.node[bnode].name)
-                    infoy += ldist*1
-                    if infoy >= (self.iby+self.ibh):
-                        break
         return mapping
 
     def draw_highlight(self, cr):
@@ -397,7 +394,7 @@ class ChipVisualizer(Gtk.Window):
         cr.scale(self.scale / grChipSize, -self.scale / grChipSize)
         cr.translate(0, -grChipSize)
 
-        cr.set_source_rgba(1.0,1.0,1.0,0.25)
+        cr.set_source_rgba(1.0,1.0,1.0,0.4)
         for seg in self.c.seg[self.highlighted]:
             draw_segs(cr, seg)
         cr.fill()
@@ -412,21 +409,7 @@ class ChipVisualizer(Gtk.Window):
 
         if self.background is None or self.need_background_redraw:
             # Cache background, unless layers or scaling changed
-            cr.push_group()
-            cr.set_line_width(4.0)
-            cr.translate(-self.ofs[0], -self.ofs[1])
-            cr.scale(self.scale / grChipSize, -self.scale / grChipSize)
-            cr.translate(0, -grChipSize)
-            for c in range(6):
-                #cr.set_source_rgba(layer_colors[c][0], layer_colors[c][1], layer_colors[c][2], layer_colors[c][3])
-                cr.set_source_rgba(0.3,0.3,0.3,0.3)
-                self.draw_layer(cr, c)
-                if c == 0 or c == 6:
-                    cr.fill_preserve()
-                    cr.stroke()
-                else:
-                    cr.fill()
-            self.background = cr.pop_group()
+            self.draw_background(cr)
             self.need_background_redraw = False
 
         cr.set_source(self.background)
