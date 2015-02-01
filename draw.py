@@ -9,7 +9,8 @@ import itertools
 import cairo, math
 import sys
 from collections import defaultdict
-from circuit import Node, load_circuit, NODE_PULLUP, NODE_PULLDOWN
+from circuit import Node, load_circuit, NODE_PULLUP, NODE_PULLDOWN, NODE_UNDEFINED, NODE_GND, NODE_PWR, Transistor
+from node_group import extract_groups
 
 grChipSize = 10000
 layer_names = ['metal', 'switched diffusion', 'inputdiode', 'grounded diffusion', 'powered diffusion', 'polysilicon']
@@ -51,13 +52,15 @@ class MouseButtons:
 
 
 class ChipVisualizer(Gtk.Window):
-    def __init__(self, circuit):
+    def __init__(self, circuit, overlay_info):
         super(ChipVisualizer, self).__init__()
         self.width = 1300
         self.height = 600
         self.center = None
 
         self.c = circuit
+        self.overlay_info = overlay_info
+        self.cur_overlay = None
         self.hitbuffer_data = None
         self.background = None
         self.scale = INITIAL_SCALE
@@ -102,6 +105,14 @@ class ChipVisualizer(Gtk.Window):
         self.connect("configure-event", self.on_configure_event)
         self.show_all()
 
+    def perform_transformation(self, cr):
+        '''
+        Perform transformation for rendering chip polygons.
+        '''
+        cr.translate(-self.ofs[0], -self.ofs[1])
+        cr.scale(self.scale / grChipSize, -self.scale / grChipSize)
+        cr.translate(0, -grChipSize)
+
     def draw_background(self, cr):
         '''Draw chip background.
         For performance reasons, the background is cached on two levels: 
@@ -110,10 +121,7 @@ class ChipVisualizer(Gtk.Window):
         '''
         cr.push_group()
         cr.set_line_width(4.0)
-        cr.translate(-self.ofs[0], -self.ofs[1])
-        cr.scale(self.scale / grChipSize, -self.scale / grChipSize)
-        cr.translate(0, -grChipSize)
-
+        self.perform_transformation(cr)
         if self.cached_layer_path is None:
             self.cached_layer_path = [None] * NUM_LAYERS
             for c in range(NUM_LAYERS):
@@ -139,9 +147,7 @@ class ChipVisualizer(Gtk.Window):
 
     def draw_selection(self, cr):
         cr.save()
-        cr.translate(-self.ofs[0], -self.ofs[1])
-        cr.scale(self.scale / grChipSize, -self.scale / grChipSize)
-        cr.translate(0, -grChipSize)
+        self.perform_transformation(cr)
 
         cr.set_source_rgba(0.0,1.0,1.0,1.0)
         for seg in self.c.seg[self.selected]:
@@ -296,9 +302,7 @@ class ChipVisualizer(Gtk.Window):
 
     def draw_highlight(self, cr):
         cr.save()
-        cr.translate(-self.ofs[0], -self.ofs[1])
-        cr.scale(self.scale / grChipSize, -self.scale / grChipSize)
-        cr.translate(0, -grChipSize)
+        self.perform_transformation(cr)
 
         cr.set_source_rgba(1.0,1.0,1.0,0.4)
         for seg in self.c.seg[self.highlighted]:
@@ -320,6 +324,17 @@ class ChipVisualizer(Gtk.Window):
         cr.set_source(self.background)
         cr.rectangle(0, 0, self.width, self.height) #600, 600)
         cr.fill()
+
+        if self.cur_overlay is not None:
+            cr.save()
+            self.perform_transformation(cr)
+            for i,value in enumerate(self.overlay_info[self.cur_overlay][1]):
+                if value != 0:
+                    cr.set_source_rgba(value,value,0.0,1.0)
+                    for seg in self.c.seg[i]:
+                        draw_segs(cr, seg)
+                    cr.fill()
+            cr.restore()
 
         info = None
         if self.selected is not None: # draw selected
@@ -467,7 +482,27 @@ class ChipVisualizer(Gtk.Window):
 
 def main():
     c = load_circuit()
-    app = ChipVisualizer(c)
+    extract_groups(c)
+
+    values = []
+    for node in c.node:
+        if node.group is not None and node.group.expr is not None:
+            expr = node.group.expr
+            cnt = expr.count()
+            value = cnt*0.1
+        else:
+            value = 0
+        values.append(value)
+
+    # Extra information layers
+    # information layers provide a scalar value per node, which can be visualized
+    # on the chip map
+    overlay_info = [
+        ('Expression complexity', values)
+    ]
+
+    app = ChipVisualizer(c, overlay_info)
+    #app.cur_overlay = 0
     Gtk.main()
         
 if __name__ == "__main__":    
