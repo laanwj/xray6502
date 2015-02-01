@@ -331,7 +331,8 @@ class ChipVisualizer(Gtk.Window):
             sel_node = self.c.node[self.selected]
             cr.move_to(infox, infoy)
             cr.set_source_rgb(0.3, 1.0, 1.0)
-            cr.show_text("Node %d " % self.selected)
+            cr.show_text("Node ")
+            mapping.append(self.show_node_text(cr, self.selected))
             if sel_node.name is not None:
                 cr.set_source_rgb(*base_color)
                 cr.show_text(sel_node.name + ' ')
@@ -418,7 +419,7 @@ class ChipVisualizer(Gtk.Window):
         if self.selected is not None: # draw selected
             info = self.draw_selection(cr)
 
-        if self.highlighted is not None and self.highlighted is not self.selected: # draw highlight
+        if self.highlighted is not None: # draw highlight
             self.draw_highlight(cr)
         # Infobox
         self.infobox_mapping = self.draw_infobox(cr, info)
