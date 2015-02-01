@@ -10,43 +10,6 @@ from circuit import load_circuit,Node,Transistor,NODE_PULLUP,NODE_PULLDOWN,NODE_
 
 layer_names = ['metal', 'switched diffusion', 'inputdiode', 'grounded diffusion', 'powered diffusion', 'polysilicon']
 
-class CircuitTree:
-    def __init__(self, o, c, max_depth=5):
-        self.c = c
-        self.o = o
-        self.max_depth = max_depth
-        self.v_node = set()
-        self.v_trans = set()
-
-    def dump_transistor(self, t, indent=0):
-        s = '  '*indent
-        trans = self.c.trans[t]
-        if t in self.v_trans or indent>self.max_depth:
-            return
-        self.v_trans.add(t)
-        self.o.write('%s%s\n' % (s, trans.name))
-        self.o.write('%sGate: ' % (s))
-        self.dump_node(trans.gate, indent+1)
-        self.o.write('%sC1: ' % (s))
-        self.dump_node(trans.c1, indent+1)
-        self.o.write('%sC2: ' % (s))
-        self.dump_node(trans.c2, indent+1)
-
-    def dump_node(self, n, indent=0):
-        s = '  '*indent
-        node = self.c.node[n]
-        if n in self.v_node or node.flags & (NODE_GND | NODE_PWR) or indent>self.max_depth:
-            self.o.write('%s\n' % (str(node)))
-            return
-        self.v_node.add(n)
-        self.o.write('%s\n' % (str(node)))
-        self.o.write('%sGates:\n' % (s))
-        for t in node.gates:
-            self.dump_transistor(t, indent+1)
-        self.o.write('%sC1C2:\n' % (s))
-        for t in node.c1s + node.c2s:
-            self.dump_transistor(t, indent+1)
-
 def find_connected_components(c, obj, bits=7):
     worklist = [obj]
     v_node = set()
@@ -120,42 +83,7 @@ def make_expr(c, out, parent):
 
 def main():
     c = load_circuit()
-    '''
-    CircuitTree(sys.stdout,c,10).dump_node(103)
-    '''
-    '''
-    for i,node in enumerate(c.node):
-        if node.name is None:
-            name = ''
-        else:
-            name = node.name
-        print('%4i %i %s' % (i,node.flags,name))
-    '''
-    '''
-    for t in c.trans:
-        gate = c.node[t.gate]
-        c1 = c.node[t.c1]
-        c2 = c.node[t.c2]
-        if gate.flags & NODE_GND:
-            print('%s gated to ground' % t)
-            CircuitTree(sys.stdout,c,1).dump_transistor(t.id)
-            print()
-        if gate.flags & NODE_PWR:
-            print('%s gated to power' % t)
-            CircuitTree(sys.stdout,c,1).dump_transistor(t.id)
-            print()
-    '''
-    '''
-    # find unreferenced transistors
-    print()
-    (v_node, v_trans) = find_connected_components(c, c.node[103])
-    for t in c.trans:
-        if not t.id in v_trans:
-            print('Unvisited transistor %s' % t)
-    for n in c.node:
-        if not (n.flags & (NODE_UNDEFINED|NODE_GND|NODE_PWR)) and not n.id in v_node:
-            print('Unvisited node %s' % n)
-    '''
+
     all_nodes = set(x.id for x in c.node if not x.flags & (NODE_UNDEFINED|NODE_GND|NODE_PWR))
     groups = 0
     group_max_nodes = 0
