@@ -33,7 +33,7 @@ layer_colors = [
 HITBUFFER_W = 600
 HITBUFFER_H = 600
 INITIAL_SCALE = 600
-MOVE_AMOUNT = 300
+MOVE_AMOUNT = 200
 
 class Node:
     def __init__(self, i, d):
@@ -153,26 +153,23 @@ class MouseButtons:
 class ChipVisualizer(Gtk.Window):
     def __init__(self, circuit):
         super(ChipVisualizer, self).__init__()
-        
         self.width = 1300
         self.height = 600
-        self.init_ui()
-        self.center = (self.width/2, self.height/2)
+        self.center = None
 
         self.c = circuit
         self.hitbuffer_data = None
         self.background = None
         self.scale = INITIAL_SCALE
-        self.ofs = [self.scale/2 - self.center[0],self.scale/2 - self.center[1]]
         self.build_hitbuffer()
         self.selected = None
         self.selection_locked = False
         self.highlighted = None
 
-        self.ibw = 300
-        self.ibh = self.height - 10
-        self.ibx = self.width - self.ibw - 5
-        self.iby = 5
+        self.ibw = None
+        self.ibh = None
+        self.ibx = None
+        self.iby = None
         self.infobox_mapping = []
 
         # sort segment per layer, for background drawing
@@ -181,6 +178,10 @@ class ChipVisualizer(Gtk.Window):
         for node,polys in self.c.seg.items():
             for seg in polys:
                 self.segs_by_layer[seg[0]].append(seg)
+
+        self.init_ui()
+        self.set_sizes(self.width, self.height)
+        self.ofs = [self.scale/2 - self.center[0],self.scale/2 - self.center[1]]
         
     def init_ui(self):    
         self.darea = Gtk.DrawingArea()
@@ -198,6 +199,7 @@ class ChipVisualizer(Gtk.Window):
         self.set_position(Gtk.WindowPosition.CENTER)
         self.connect("delete-event", Gtk.main_quit)
         self.connect("key-press-event", self.on_key_press)
+        self.connect("configure-event", self.on_configure_event)
         self.show_all()
 
     def draw_background(self, cr):
@@ -223,7 +225,10 @@ class ChipVisualizer(Gtk.Window):
         cr.set_operator(cairo.OPERATOR_ADD)
         for c in range(NUM_LAYERS):
             #cr.set_source_rgba(*layer_colors[c])
-            cr.set_source_rgba(0.09,0.09,0.09,1.0)
+            # introduce a slight difference in intensity per layer, to
+            # make it possible to distinguish structures on different layers
+            x = 0.07 + 0.03 * c / (NUM_LAYERS-1)
+            cr.set_source_rgba(x,x,x,1.0)
             cr.append_path(self.cached_layer_path[c])
             if c == 0 or c == 6:
                 cr.fill_preserve()
@@ -286,7 +291,7 @@ class ChipVisualizer(Gtk.Window):
                 draw_segs(cr, seg)
         cr.fill()
 
-        # TODO: add halo/fade
+        # TODO: add halo/fade/animation
         # http://mxr.mozilla.org/mozilla2.0/source/gfx/thebes/gfxBlur.cpp
         # http://code.google.com/p/infekt/source/browse/trunk/src/lib/cairo_box_blur.cpp
         cr.restore()
@@ -546,6 +551,19 @@ class ChipVisualizer(Gtk.Window):
 
         return True
 
+    def set_sizes(self, width, height):
+        self.width = width
+        self.height = height
+        self.ibw = 300
+        self.ibh = self.height - 10
+        self.ibx = self.width - self.ibw - 5
+        self.iby = 5
+        self.center = (self.width/2, self.height/2)
+        self.background = None
+
+    def on_configure_event(self, w, e):
+        if e.width != self.width or e.height != self.height:
+            self.set_sizes(e.width, e.height)
 
 def main():
     c = load_circuit()
@@ -554,5 +572,4 @@ def main():
         
 if __name__ == "__main__":    
     main()
-
 
