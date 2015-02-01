@@ -166,7 +166,6 @@ class ChipVisualizer(Gtk.Window):
         self.ofs = [self.scale/2 - self.center[0],self.scale/2 - self.center[1]]
         self.build_hitbuffer()
         self.selected = None
-        self.need_background_redraw = False
         self.selection_locked = False
         self.highlighted = None
 
@@ -202,6 +201,11 @@ class ChipVisualizer(Gtk.Window):
         self.show_all()
 
     def draw_background(self, cr):
+        '''Draw chip background.
+        For performance reasons, the background is cached on two levels: 
+        - paths for drawing each layer are cached in cairo,
+        - and the finished image ("group") is cached.
+        '''
         cr.push_group()
         cr.set_line_width(4.0)
         cr.translate(-self.ofs[0], -self.ofs[1])
@@ -225,7 +229,7 @@ class ChipVisualizer(Gtk.Window):
                 cr.stroke()
             else:
                 cr.fill()
-        self.background = cr.pop_group()
+        return cr.pop_group()
 
     def draw_selection(self, cr):
         cr.save()
@@ -284,9 +288,6 @@ class ChipVisualizer(Gtk.Window):
         # TODO: add halo/fade
         # http://mxr.mozilla.org/mozilla2.0/source/gfx/thebes/gfxBlur.cpp
         # http://code.google.com/p/infekt/source/browse/trunk/src/lib/cairo_box_blur.cpp
-        # TODO:
-        # which nodes are pulled-up (red) and which ones are pull-down (green) due to this node
-        # direct influenced by
         cr.restore()
         return {'v_node':v_node, 'gates':gates, 'gated':gated, 'peers':peers}
 
@@ -333,15 +334,13 @@ class ChipVisualizer(Gtk.Window):
             cr.show_text("Node %d " % self.selected)
             if sel_node.name is not None:
                 cr.set_source_rgb(*base_color)
-                cr.show_text(sel_node.name)
-            infoy += ldist*1.5
-            cr.move_to(infox, infoy)
+                cr.show_text(sel_node.name + ' ')
             if sel_node.flags & NODE_PULLDOWN:
                 cr.set_source_rgba(*layer_colors[3])
-                cr.show_text("pulldown ")
+                cr.show_text('- ')
             if sel_node.flags & NODE_PULLUP:
                 cr.set_source_rgba(*layer_colors[4])
-                cr.show_text("pullup ")
+                cr.show_text('+ ')
 
             infoy += ldist*1.5
             tb = infoy
@@ -407,10 +406,9 @@ class ChipVisualizer(Gtk.Window):
 
         cr.set_line_width(1.0)
 
-        if self.background is None or self.need_background_redraw:
+        if self.background is None:
             # Cache background, unless layers or scaling changed
-            self.draw_background(cr)
-            self.need_background_redraw = False
+            self.background = self.draw_background(cr)
 
         cr.set_source(self.background)
         cr.rectangle(0, 0, self.width, self.height) #600, 600)
@@ -515,33 +513,33 @@ class ChipVisualizer(Gtk.Window):
             self.scale *= 2
             self.ofs[0] = (self.ofs[0] + self.center[0]) * 2 - self.center[0]
             self.ofs[1] = (self.ofs[1] + self.center[1]) * 2 - self.center[1]
-            self.need_background_redraw = True
+            self.background = None
             self.darea.queue_draw()
         if e.string == '-' or e.string == '<':
             self.scale /= 2
             self.ofs[0] = (self.ofs[0] + self.center[0]) / 2 - self.center[0]
             self.ofs[1] = (self.ofs[1] + self.center[1]) / 2 - self.center[1]
-            self.need_background_redraw = True
+            self.background = None
             self.darea.queue_draw()
         if e.string == '0':
             self.scale = INITIAL_SCALE
-            self.need_background_redraw = True
+            self.background = None
             self.darea.queue_draw()
         if e.keyval == Gdk.KEY_Left:
             self.ofs[0] -= MOVE_AMOUNT
-            self.need_background_redraw = True
+            self.background = None
             self.darea.queue_draw()
         if e.keyval == Gdk.KEY_Right:
             self.ofs[0] += MOVE_AMOUNT
-            self.need_background_redraw = True
+            self.background = None
             self.darea.queue_draw()
         if e.keyval == Gdk.KEY_Up:
             self.ofs[1] -= MOVE_AMOUNT
-            self.need_background_redraw = True
+            self.background = None
             self.darea.queue_draw()
         if e.keyval == Gdk.KEY_Down:
             self.ofs[1] += MOVE_AMOUNT
-            self.need_background_redraw = True
+            self.background = None
             self.darea.queue_draw()
 
         return True
