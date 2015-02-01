@@ -220,9 +220,10 @@ class ChipVisualizer(Gtk.Window):
                 self.cached_layer_path[c] = cr.copy_path()
                 cr.new_path()
 
+        cr.set_operator(cairo.OPERATOR_ADD)
         for c in range(NUM_LAYERS):
             #cr.set_source_rgba(*layer_colors[c])
-            cr.set_source_rgba(0.3,0.3,0.3,0.3)
+            cr.set_source_rgba(0.09,0.09,0.09,1.0)
             cr.append_path(self.cached_layer_path[c])
             if c == 0 or c == 6:
                 cr.fill_preserve()
