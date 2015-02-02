@@ -1,3 +1,4 @@
+from __future__ import division, print_function
 from circuit import Node, load_circuit, NODE_PULLUP, NODE_PULLDOWN, NODE_UNDEFINED, NODE_GND, NODE_PWR, Transistor
 
 def find_connected_components(c, obj, bits=7):
@@ -31,39 +32,41 @@ def find_connected_components(c, obj, bits=7):
     return (v_node, v_trans)
 
 class ExprNode(object):
-    pass
+    children = []
+    def count(self):
+        return 1 + sum(c.count() for c in self.children)
 
 class AndNode(ExprNode):
     def __init__(self, children):
         self.children = children
     def __repr__(self):
         return '(' + ('&&'.join(repr(x) for x in self.children)) + ')'
-    def count(self):
-        return sum(c.count() for c in self.children)
 
 class OrNode(ExprNode):
     def __init__(self, children):
         self.children = children
     def __repr__(self):
         return '(' + ('||'.join(repr(x) for x in self.children)) + ')'
-    def count(self):
-        return sum(c.count() for c in self.children)
 
 class NodeValNode(ExprNode):
     def __init__(self, id):
         self.id = id
     def __repr__(self):
         return 'get_nodes_value(state, %i)' % (self.id)
-    def count(self):
-        return 1
 
 class InvertNode(ExprNode):
     def __init__(self, c):
-        self.c = c
+        self.children = [c]
     def __repr__(self):
-        return '!' + repr(self.c)
-    def count(self):
-        return 1 + self.c.count()
+        return '!' + repr(self.children[0])
+
+def simplify_expr(e):
+    if (isinstance(e, AndNode) or isinstance(e, OrNode)) and len(e.children)==1:
+        return simplify_expr(e.children[0])
+    else:
+        for i in range(len(e.children)):
+            e.children[i] = simplify_expr(e.children[i])
+        return e
 
 def make_expr(c, out, parent):
     terms = []
@@ -94,11 +97,15 @@ def extract_groups(c):
         # determine input gates and outputs connected to gates
         inputs = set()
         outputs = set()
+        dependents = set()
         for n in v_node:
             inputs.update(c.trans[t].gate for t in c.node[n].c1s)
             inputs.update(c.trans[t].gate for t in c.node[n].c2s)
             if c.node[n].gates:
                 outputs.add(n)
+                dependents.update(c.trans[t].c1 for t in c.node[n].gates)
+                dependents.update(c.trans[t].c2 for t in c.node[n].gates)
+        dependents -= {c.gnd, c.pwr}
 
         # classify group
         is_pure_op = True
@@ -131,11 +138,12 @@ def extract_groups(c):
         if is_pure_op and len(outputs)==1:
             # build expression
             expr_out = list(outputs)[0]
-            expr = InvertNode(make_expr(c, expr_out, -1))
+            expr = simplify_expr(InvertNode(make_expr(c, expr_out, -1)))
 
         group = NodeGroup(groupid)
         group.inputs = inputs
         group.outputs = outputs
+        group.dependents = dependents
         group.is_pure_op = is_pure_op
         group.is_sink = is_sink
         group.is_source = is_source
@@ -150,5 +158,5 @@ def extract_groups(c):
 
     for i,x in enumerate(group_by_node):
         c.node[i].group = x
-
+    # TODO: simple expression simplification
     return groups

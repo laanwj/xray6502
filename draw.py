@@ -1,3 +1,5 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
 '''
 6502 x-ray probing
 '''
@@ -10,7 +12,7 @@ import cairo, math
 import sys
 from collections import defaultdict
 from circuit import Node, load_circuit, NODE_PULLUP, NODE_PULLDOWN, NODE_UNDEFINED, NODE_GND, NODE_PWR, Transistor
-from node_group import extract_groups
+from node_group import extract_groups, AndNode, OrNode, NodeValNode, InvertNode
 
 grChipSize = 10000
 layer_names = ['metal', 'switched diffusion', 'inputdiode', 'grounded diffusion', 'powered diffusion', 'polysilicon']
@@ -74,6 +76,8 @@ class ChipVisualizer(Gtk.Window):
         self.ibx = None
         self.iby = None
         self.infobox_mapping = []
+        self.infobox_tab = 0
+        self.infobox_tabs = 2
 
         # sort segment per layer, for background drawing
         self.cached_layer_path = None
@@ -259,7 +263,7 @@ class ChipVisualizer(Gtk.Window):
             tb = infoy
             cr.set_source_rgb(*hdr_color)
             cr.move_to(infox, infoy)
-            cr.show_text('Gated by ....................')
+            cr.show_text('Gate ...........................')
             cr.move_to(infox + self.ibw/2, infoy)
             cr.show_text('C1C2')
             infoy += ldist*1
@@ -285,7 +289,7 @@ class ChipVisualizer(Gtk.Window):
             infoy += ldist*1
             cr.move_to(infox, infoy)
             cr.set_source_rgb(hdr_color[0], hdr_color[1], hdr_color[2])
-            cr.show_text("Gates")
+            cr.show_text("Dependent")
             infoy += ldist*1
             cr.move_to(infox, infoy)
             for bnode in sorted(info['gates']):
@@ -298,6 +302,118 @@ class ChipVisualizer(Gtk.Window):
                 infoy += ldist*1
                 if infoy >= (self.iby+self.ibh):
                     break
+        return mapping
+
+    def draw_infobox_group(self, cr, info):
+        cr.rectangle(self.ibx, self.iby, self.ibw, self.ibh)
+        cr.set_source_rgba(0.025, 0.025, 0.025, 0.93)
+        cr.fill()
+
+        cr.select_font_face("Arial",
+                  cairo.FONT_SLANT_NORMAL,
+                  cairo.FONT_WEIGHT_NORMAL)
+        cr.set_font_size(15)
+
+        infox = self.ibx + 5
+        infoy = self.iby + 5 + 15
+        ldist = 16
+        base_color = (0.7,0.7,0.7)
+        hdr_color = (0.4,0.4,0.4)
+        mapping = []
+
+        if self.selected is None:
+            return mapping
+        sel_node = self.c.node[self.selected]
+        if sel_node.group is None:
+            return mapping
+        group = sel_node.group
+        cr.move_to(infox, infoy)
+        cr.set_source_rgb(0.3, 1.0, 1.0)
+        cr.show_text("Group ")
+        mapping.append(self.show_node_text(cr, group.id))
+
+        infoy += ldist*1.5
+        tb = infoy
+        cr.move_to(infox, infoy)
+
+        if group.expr is None:
+            for node in group.nodes:
+                cr.move_to(infox, infoy)
+                cr.set_source_rgba(0.0,0.0,1.0,1.0)
+                mapping.append(self.show_node_text(cr, node))
+                if self.c.node[node].name is not None:
+                    cr.set_source_rgb(*base_color)
+                    cr.show_text(self.c.node[node].name)
+
+                infoy += ldist*1
+                if infoy >= (self.iby+self.ibh):
+                    break
+        else:
+            _infoy = [infoy]
+            INDENT = 15
+            div = 0.35
+            m1 = 2
+            m2 = 2
+            def draw_expr(cr,expr,depth,dinfo):
+                cr.set_source_rgb(*base_color)
+                for x in range(0, depth-1):
+                    if dinfo[x]:
+                        cr.move_to(infox + x*INDENT + m1, _infoy[0]-ldist)
+                        cr.line_to(infox + x*INDENT + m1, _infoy[0])
+                cr.stroke()
+
+                cr.move_to(infox + depth*INDENT, _infoy[0])
+                cr.set_source_rgb(*base_color)
+                if isinstance(expr, AndNode):
+                    cr.show_text("and") # alt: U2227
+                elif isinstance(expr, OrNode):
+                    cr.show_text("or") # alt: U2228
+                elif isinstance(expr, InvertNode):
+                    cr.show_text("not") # alt: U00AC
+                elif isinstance(expr, NodeValNode):
+                    cr.set_source_rgba(0.0,0.5,1.0,1.0)
+                    mapping.append(self.show_node_text(cr, expr.id))
+                    if self.c.node[expr.id].name is not None:
+                        cr.set_source_rgb(*base_color)
+                        cr.show_text(self.c.node[expr.id].name)
+                _infoy[0] += ldist
+
+                for i, e in enumerate(expr.children):
+                    cr.set_source_rgba(0.4,0.4,0.4,1.0)
+                    if i != 0:
+                        cr.move_to(infox + depth*INDENT + m1, _infoy[0]-ldist)
+                        cr.line_to(infox + depth*INDENT + m1, _infoy[0]-ldist*div)
+                    else: # link to parent
+                        cr.move_to(infox + depth*INDENT + m1, _infoy[0]-ldist*0.75)
+                        cr.line_to(infox + depth*INDENT + m1, _infoy[0]-ldist*div)
+                    if i != len(expr.children)-1:
+                        cr.move_to(infox + depth*INDENT + m1, _infoy[0]-ldist*div)
+                        cr.line_to(infox + depth*INDENT + m1, _infoy[0])
+                    cr.move_to(infox + depth*INDENT + m1, _infoy[0]-ldist*div)
+                    cr.line_to(infox + depth*INDENT + INDENT - m2, _infoy[0]-ldist*div)
+                    cr.stroke()
+                    draw_expr(cr,e,depth+1, dinfo + [i!=len(expr.children)-1])
+
+            draw_expr(cr, group.expr, 0, [])
+            infoy = _infoy[0]
+
+        infoy += ldist*1
+        cr.move_to(infox, infoy)
+        cr.set_source_rgb(hdr_color[0], hdr_color[1], hdr_color[2])
+        cr.show_text("Dependent")
+        infoy += ldist*1
+        cr.move_to(infox, infoy)
+        for bnode in group.dependents:
+            cr.move_to(infox, infoy)
+            cr.set_source_rgba(0.0,0.5,1.0,1.0)
+            mapping.append(self.show_node_text(cr, bnode))
+            if self.c.node[bnode].name is not None:
+                cr.set_source_rgb(*base_color)
+                cr.show_text(self.c.node[bnode].name)
+            infoy += ldist*1
+            if infoy >= (self.iby+self.ibh):
+                break
+
         return mapping
 
     def draw_highlight(self, cr):
@@ -343,7 +459,10 @@ class ChipVisualizer(Gtk.Window):
         if self.highlighted is not None: # draw highlight
             self.draw_highlight(cr)
         # Infobox
-        self.infobox_mapping = self.draw_infobox(cr, info)
+        if self.infobox_tab == 0:
+            self.infobox_mapping = self.draw_infobox(cr, info)
+        elif self.infobox_tab == 1:
+            self.infobox_mapping = self.draw_infobox_group(cr, info)
 
     def build_hitbuffer(self):
         '''
@@ -463,6 +582,9 @@ class ChipVisualizer(Gtk.Window):
             self.ofs[1] += MOVE_AMOUNT
             self.background = None
             self.darea.queue_draw()
+        if e.string == 'n': # toggle infobox mode
+            self.infobox_tab = (self.infobox_tab + 1) % self.infobox_tabs
+            self.darea.queue_draw()
 
         return True
 
@@ -503,6 +625,9 @@ def main():
 
     app = ChipVisualizer(c, overlay_info)
     #app.cur_overlay = 0
+    app.selected = 345
+    app.selection_locked = True
+    app.infobox_tab = 1
     Gtk.main()
         
 if __name__ == "__main__":    
