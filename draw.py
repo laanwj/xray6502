@@ -70,6 +70,7 @@ class ChipVisualizer(Gtk.Window):
         self.selected = None
         self.selection_locked = False
         self.highlighted = None
+        self.history = []
 
         self.ibw = None
         self.ibh = None
@@ -537,6 +538,7 @@ class ChipVisualizer(Gtk.Window):
             and e.button == MouseButtons.LEFT_BUTTON:
             node = self.node_from_event(e)
             if node is not None:
+                self.history.append(self.selected)
                 self.selected = node
                 self.selection_locked = True
             self.darea.queue_draw()           
@@ -585,6 +587,12 @@ class ChipVisualizer(Gtk.Window):
         if e.string == 'n': # toggle infobox mode
             self.infobox_tab = (self.infobox_tab + 1) % self.infobox_tabs
             self.darea.queue_draw()
+        if e.keyval == Gdk.KEY_BackSpace:
+            try:
+                self.selected = self.history.pop()
+                self.darea.queue_draw()
+            except IndexError:
+                pass
 
         return True
 
