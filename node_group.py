@@ -87,6 +87,10 @@ class NodeGroup(object):
         self.id = id
 
 def extract_groups(c):
+    '''
+    Find node groups. A group is the transitive closure of nodes (potentially)
+    connected through c1 and c2 of transistors.
+    '''
     all_nodes = set(x.id for x in c.node if not x.flags & (NODE_UNDEFINED|NODE_GND|NODE_PWR))
     groups = []
     group_by_node = [None]*len(c.node)
@@ -97,15 +101,11 @@ def extract_groups(c):
         # determine input gates and outputs connected to gates
         inputs = set()
         outputs = set()
-        dependents = set()
         for n in v_node:
             inputs.update(c.trans[t].gate for t in c.node[n].c1s)
             inputs.update(c.trans[t].gate for t in c.node[n].c2s)
             if c.node[n].gates:
                 outputs.add(n)
-                dependents.update(c.trans[t].c1 for t in c.node[n].gates)
-                dependents.update(c.trans[t].c2 for t in c.node[n].gates)
-        dependents -= {c.gnd, c.pwr}
 
         # classify group
         is_pure_op = True
@@ -143,7 +143,6 @@ def extract_groups(c):
         group = NodeGroup(groupid)
         group.inputs = inputs
         group.outputs = outputs
-        group.dependents = dependents
         group.is_pure_op = is_pure_op
         group.is_sink = is_sink
         group.is_source = is_source
@@ -156,7 +155,21 @@ def extract_groups(c):
         groups.append(group)
         all_nodes -= v_node
 
+    # fill in associated group for every node, or none
     for i,x in enumerate(group_by_node):
         c.node[i].group = x
-    # TODO: simple expression simplification
+
+    # find downstream groups
+    for g in groups:
+        depnodes = set()
+        for n in g.nodes:
+            if c.node[n].gates:
+                depnodes.update(c.trans[t].c1 for t in c.node[n].gates)
+                depnodes.update(c.trans[t].c2 for t in c.node[n].gates)
+
+        g.dependents = set()
+        for n in depnodes:
+            if c.node[n].group is not None:
+                g.dependents.add(c.node[n].group.id)
+
     return groups

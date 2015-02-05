@@ -228,6 +228,7 @@ class ChipVisualizer(Gtk.Window):
         return SelBox(cpt, extents, node)
 
     def draw_infobox(self, cr, info):
+        '''Draw infobox for node mode'''
         cr.rectangle(self.ibx, self.iby, self.ibw, self.ibh)
         cr.set_source_rgba(0.025, 0.025, 0.025, 0.93)
         cr.fill()
@@ -290,7 +291,7 @@ class ChipVisualizer(Gtk.Window):
             infoy += ldist*1
             cr.move_to(infox, infoy)
             cr.set_source_rgb(hdr_color[0], hdr_color[1], hdr_color[2])
-            cr.show_text("Dependent")
+            cr.show_text("Gated")
             infoy += ldist*1
             cr.move_to(infox, infoy)
             for bnode in sorted(info['gates']):
@@ -306,6 +307,7 @@ class ChipVisualizer(Gtk.Window):
         return mapping
 
     def draw_infobox_group(self, cr, info):
+        '''Draw infobox for group mode'''
         cr.rectangle(self.ibx, self.iby, self.ibw, self.ibh)
         cr.set_source_rgba(0.025, 0.025, 0.025, 0.93)
         cr.fill()
@@ -337,10 +339,28 @@ class ChipVisualizer(Gtk.Window):
         tb = infoy
         cr.move_to(infox, infoy)
 
+        for node in group.nodes:
+            cr.move_to(infox, infoy)
+            cr.set_source_rgba(0.0,0.0,1.0,1.0)
+            mapping.append(self.show_node_text(cr, node))
+            if self.c.node[node].name is not None:
+                cr.set_source_rgb(*base_color)
+                cr.show_text(self.c.node[node].name)
+
+            infoy += ldist*1
+            if infoy >= (self.iby+self.ibh):
+                break
+        
+        infoy += ldist*1
+        cr.move_to(infox, infoy)
+        cr.set_source_rgb(hdr_color[0], hdr_color[1], hdr_color[2])
+        cr.show_text("Inputs")
+        infoy += ldist*1
+
         if group.expr is None:
-            for node in group.nodes:
+            for node in group.inputs:
                 cr.move_to(infox, infoy)
-                cr.set_source_rgba(0.0,0.0,1.0,1.0)
+                cr.set_source_rgba(0.25,0.25,1.0,1.0)
                 mapping.append(self.show_node_text(cr, node))
                 if self.c.node[node].name is not None:
                     cr.set_source_rgb(*base_color)
@@ -401,7 +421,7 @@ class ChipVisualizer(Gtk.Window):
         infoy += ldist*1
         cr.move_to(infox, infoy)
         cr.set_source_rgb(hdr_color[0], hdr_color[1], hdr_color[2])
-        cr.show_text("Dependent")
+        cr.show_text("Gated")
         infoy += ldist*1
         cr.move_to(infox, infoy)
         for bnode in group.dependents:
@@ -478,6 +498,8 @@ class ChipVisualizer(Gtk.Window):
         cr.scale(HITBUFFER_W / grChipSize, HITBUFFER_H / grChipSize)
 
         for node,polys in self.c.seg.items():
+            if node in {self.c.gnd, self.c.pwr}:
+                continue # we don't want to select gnd and pwr, so don't make them end up in the hitbuffer
             rr = (node & 0xF)/15.0
             gg = ((node>>4) & 0xF)/15.0
             bb = ((node>>8) & 0xF)/15.0
@@ -516,10 +538,7 @@ class ChipVisualizer(Gtk.Window):
                     return box.node
             return None # infobox...
         # transpose e.x and e.y to chip coordinate
-        node = self.node_from_xy((e.x + self.ofs[0]) / self.scale * grChipSize, grChipSize - (e.y + self.ofs[1]) / self.scale * grChipSize)
-        if node == self.c.pwr or node == self.c.gnd: # don't select power or ground
-            node = None
-        return node
+        return self.node_from_xy((e.x + self.ofs[0]) / self.scale * grChipSize, grChipSize - (e.y + self.ofs[1]) / self.scale * grChipSize)
 
     def on_motion(self, w, e):
         if self.hitbuffer_data is not None:
@@ -633,9 +652,10 @@ def main():
 
     app = ChipVisualizer(c, overlay_info)
     #app.cur_overlay = 0
-    app.selected = 345
-    app.selection_locked = True
-    app.infobox_tab = 1
+    if len(sys.argv)>1:
+        app.selected = int(sys.argv[1])
+        app.selection_locked = True
+    #app.infobox_tab = 1
     Gtk.main()
         
 if __name__ == "__main__":    
