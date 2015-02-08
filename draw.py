@@ -30,18 +30,10 @@ HITBUFFER_H = 600
 INITIAL_SCALE = 600
 MOVE_AMOUNT = 200
 # colors for tag bits
-tag_bit_colors = [
-(1.0,0.0,0.0), # red
-(1.0,0.5,0.0), # orange
-(1.0,1.0,0.0), # yellow
-(0.0,1.0,0.0), # green
-(0.0,1.0,1.0), # cyan
-(0.0,0.5,1.0),
-(0.0,0.0,1.0), # blue
-#(0.5,0.0,1.0), #
-(1.0,0.0,1.0), # purple
-#(1.0,0.0,0.5), #
-]
+import colorsys
+tag_bit_colors = [colorsys.hsv_to_rgb(i/8.0, 1.0, 0.8) for i in range(0,8)]
+base_color = (0.7,0.7,0.7)
+hdr_color = (0.5,0.5,0.5)
 
 def draw_segs(cr, seg):
     cr.move_to(seg[1], seg[2])
@@ -226,7 +218,7 @@ class ChipVisualizer(Gtk.Window):
             if node in self.node_attr and 'color' in  self.node_attr[node]:
                 cr.set_source_rgb(*self.node_attr[node]['color'])
             else:
-                cr.set_source_rgb(0.25, 0.25, 0.25)
+                cr.set_source_rgb(0.3, 0.3, 0.3)
             text = '%d ' % node
         cr.show_text(text)
         extents = cr.text_extents(text)
@@ -246,8 +238,6 @@ class ChipVisualizer(Gtk.Window):
         infox = self.ibx + 5
         infoy = self.iby + 5 + 15
         ldist = 16
-        base_color = (0.7,0.7,0.7)
-        hdr_color = (0.4,0.4,0.4)
         mapping = []
 
         if self.selected is not None:
@@ -327,8 +317,6 @@ class ChipVisualizer(Gtk.Window):
         infox = self.ibx + 5
         infoy = self.iby + 5 + 15
         ldist = 16
-        base_color = (0.7,0.7,0.7)
-        hdr_color = (0.4,0.4,0.4)
         mapping = []
 
         if self.selected is None:
@@ -339,8 +327,7 @@ class ChipVisualizer(Gtk.Window):
         group = sel_node.group
         cr.move_to(infox, infoy)
         cr.set_source_rgb(0.3, 1.0, 1.0)
-        cr.show_text("Group ")
-        mapping.append(self.show_node_text(cr, group.id))
+        cr.show_text("Group %d" % group.id)
 
         infoy += ldist*1.5
         tb = infoy
@@ -463,7 +450,7 @@ class ChipVisualizer(Gtk.Window):
                         color = c
                         numset += 1
                 if numset > 1:
-                    color = (0.7,0.7,0.7) # mixing...
+                    color = (0.5,0.5,0.5) # mixing...
 
                 node_attr[i]['color'] = color
 
@@ -520,15 +507,15 @@ class ChipVisualizer(Gtk.Window):
             info = self.draw_selection(cr, self.node_attr)
 
         # draw highlighted segments
+        cr.save()
+        self.perform_transformation(cr)
         for i,attr in self.node_attr.iteritems():
-            cr.save()
-            self.perform_transformation(cr)
             if 'color' in attr:
                 cr.set_source_rgb(*attr['color'])
                 for seg in self.c.seg[i]:
                     draw_segs(cr, seg)
                 cr.fill()
-            cr.restore()
+        cr.restore()
 
         if self.highlighted is not None:
             self.draw_highlight(cr, self.node_attr)
@@ -670,7 +657,7 @@ class ChipVisualizer(Gtk.Window):
             if self.frame >= len(self.frames):
                 self.frame = 0
             self.darea.queue_draw()
-        if e.string == 'x': # show upstream/downstream links for selected node
+        if e.string == 'x': # show extra context: upstream/downstream links for selected node
             self.show_extrasel = not self.show_extrasel
             self.darea.queue_draw()
         if e.keyval == Gdk.KEY_BackSpace:
