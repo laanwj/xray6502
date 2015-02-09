@@ -181,9 +181,11 @@ class ChipVisualizer(Gtk.Window):
         gated -= {self.selected, self.c.pwr, self.c.gnd}
 
         gates = set()
+        gates_peers = set()
         for t in sel_node.gates:
             gates.add(self.c.trans[t].c1)
             gates.add(self.c.trans[t].c2)
+            gates_peers.add((self.c.trans[t].c1,self.c.trans[t].c2))
         gates -= {self.c.gnd, self.c.pwr}
 
         if self.show_extrasel:
@@ -201,7 +203,7 @@ class ChipVisualizer(Gtk.Window):
         # http://mxr.mozilla.org/mozilla2.0/source/gfx/thebes/gfxBlur.cpp
         # http://code.google.com/p/infekt/source/browse/trunk/src/lib/cairo_box_blur.cpp
         cr.restore()
-        return {'v_node':v_node, 'gates':gates, 'gated':gated, 'peers':peers, 'extraflags':[]}
+        return {'gates':gates, 'gated':gated, 'peers':peers, 'gates_peers':gates_peers}
 
     def show_node_text(self, cr, node):
         '''Show text and return a selection box'''
@@ -287,17 +289,25 @@ class ChipVisualizer(Gtk.Window):
                     break
 
             infoy += ldist*1
+            cr.set_source_rgb(*hdr_color)
             cr.move_to(infox, infoy)
-            cr.set_source_rgb(hdr_color[0], hdr_color[1], hdr_color[2])
-            cr.show_text("Gated")
+            cr.show_text('C1 gated ....................')
+            cr.move_to(infox + self.ibw/2, infoy)
+            cr.show_text('C2 gated')
             infoy += ldist*1
-            cr.move_to(infox, infoy)
-            for bnode in sorted(info['gates']):
+            for (gnode,bnode) in sorted(info['gates_peers']):
                 cr.move_to(infox, infoy)
+                mapping.append(self.show_node_text(cr, gnode))
+                if self.c.node[gnode].name is not None:
+                    cr.set_source_rgb(*base_color)
+                    cr.show_text(self.c.node[gnode].name)
+
+                cr.move_to(infox+self.ibw/2, infoy)
                 mapping.append(self.show_node_text(cr, bnode))
                 if self.c.node[bnode].name is not None:
                     cr.set_source_rgb(*base_color)
                     cr.show_text(self.c.node[bnode].name)
+
                 infoy += ldist*1
                 if infoy >= (self.iby+self.ibh):
                     break
@@ -612,6 +622,10 @@ class ChipVisualizer(Gtk.Window):
         return True
 
     def on_key_press(self, w, e):
+        if e.state & Gdk.ModifierType.SHIFT_MASK:
+            move_amount = 0.1 * MOVE_AMOUNT
+        else:
+            move_amount = MOVE_AMOUNT
         if e.string == '+' or e.string == '>':
             self.scale *= 2
             self.ofs[0] = (self.ofs[0] + self.center[0]) * 2 - self.center[0]
@@ -629,19 +643,19 @@ class ChipVisualizer(Gtk.Window):
             self.background = None
             self.darea.queue_draw()
         if e.keyval == Gdk.KEY_Left:
-            self.ofs[0] -= MOVE_AMOUNT
+            self.ofs[0] -= move_amount
             self.background = None
             self.darea.queue_draw()
         if e.keyval == Gdk.KEY_Right:
-            self.ofs[0] += MOVE_AMOUNT
+            self.ofs[0] += move_amount
             self.background = None
             self.darea.queue_draw()
         if e.keyval == Gdk.KEY_Up:
-            self.ofs[1] -= MOVE_AMOUNT
+            self.ofs[1] -= move_amount
             self.background = None
             self.darea.queue_draw()
         if e.keyval == Gdk.KEY_Down:
-            self.ofs[1] += MOVE_AMOUNT
+            self.ofs[1] += move_amount
             self.background = None
             self.darea.queue_draw()
         if e.string == 'n': # toggle infobox mode
