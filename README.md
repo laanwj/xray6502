@@ -8,6 +8,8 @@ Support for other chips such as the 6800 may be added later.
 
 [1] http://visual6502.org/
 
+![Example screenshot](/images/screenshot.png)
+
 Dependencies
 -------------------
 
