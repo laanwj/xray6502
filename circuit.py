@@ -70,9 +70,9 @@ class Circuit:
             self.node[t.c2].sibs.append((t.gate, t.c1))
 
 def load_circuit():
-    nodenames = json.load(open('nodenames.json','r'))
-    segdefs = json.load(open('segdefs.json','r'))
-    transdefs = json.load(open('transdefs.json','r'))
+    nodenames = json.load(open('chipdata/nodenames.json','r'))
+    segdefs = json.load(open('chipdata/segdefs.json','r'))
+    transdefs = json.load(open('chipdata/transdefs.json','r'))
 
     map_nodeattrib = {}
     segdefs_out = defaultdict(list)

@@ -57,19 +57,16 @@ class MouseButtons:
     LEFT_BUTTON = 1
     RIGHT_BUTTON = 3
 
-
 class ChipVisualizer(Gtk.Window):
-    def __init__(self, circuit, overlay_info, frames):
+    def __init__(self, circuit, frames):
         super(ChipVisualizer, self).__init__()
         self.width = 1300
         self.height = 600
         self.center = None
 
         self.c = circuit
-        self.overlay_info = overlay_info
         self.frames = frames
         self.frame = 0
-        self.cur_overlay = None
         self.hitbuffer_data = None
         self.background = None
         self.scale = INITIAL_SCALE
@@ -79,6 +76,7 @@ class ChipVisualizer(Gtk.Window):
         self.highlighted = None
         self.history = []
         self.show_extrasel = False
+        self.screenshot_seq = 0
 
         self.ibw = None
         self.ibh = None
@@ -451,29 +449,49 @@ class ChipVisualizer(Gtk.Window):
 
     def draw_frames(self, cr, node_attr, extra_sel_flags):
         d = self.frames[self.frame]
-        for i,tag in enumerate(d['tags']):
-            if tag != 0:
-                color = (0,0,0)
-                numset = 0
-                for bit,c in enumerate(tag_bit_colors):
-                    if tag & (1<<bit):
-                        color = c
-                        numset += 1
-                if numset > 1:
-                    color = (0.5,0.5,0.5) # mixing...
+        # tags overlay, for flow tracking
+        if 'tags' in d:
+            for i,tag in enumerate(d['tags']):
+                if tag != 0:
+                    color = (0,0,0)
+                    numset = 0
+                    for bit,c in enumerate(tag_bit_colors):
+                        if tag & (1<<bit):
+                            color = c
+                            numset += 1
+                    if numset > 1:
+                        color = (0.5,0.5,0.5) # mixing...
 
-                node_attr[i]['color'] = color
+                    node_attr[i]['color'] = color
+
+        # display overlay, for per-node scalar visualization
+        if 'values' in d:
+            cr.save()
+            self.perform_transformation(cr)
+            for i,value in enumerate(d['values']):
+                if value != 0:
+                    cr.set_source_rgba(value,value,0.0,1.0)
+                    for seg in self.c.seg[i]:
+                        draw_segs(cr, seg)
+                    cr.fill()
+            cr.restore()
 
         cr.select_font_face("Arial",
                   cairo.FONT_SLANT_NORMAL,
                   cairo.FONT_WEIGHT_NORMAL)
         cr.set_font_size(15)
-        cr.move_to(10, self.height - 20)
         cr.set_source_rgb(1.0,1.0,1.0)
-        cr.show_text('Cycle: %i ' % d['cycle'])
-        cr.show_text('PC: %04x' % d['pc'])
+        if 'title' in d:
+            cr.move_to(10, 20)
+            cr.show_text(d['title'])
 
-        if self.selected is not None:
+        cr.move_to(10, self.height - 20)
+        if 'cycle' in d:
+            cr.show_text('HCycle: %i ' % d['cycle'])
+        if 'pc' in d:
+            cr.show_text('PC: %04x' % d['pc'])
+
+        if 'tags' in d and self.selected is not None:
             tag = d['tags'][self.selected]
             for bit,color in enumerate(tag_bit_colors):
                 if tag & (1<<bit):
@@ -493,18 +511,6 @@ class ChipVisualizer(Gtk.Window):
         cr.set_source(self.background)
         cr.rectangle(0, 0, self.width, self.height) #600, 600)
         cr.fill()
-
-        # display overlay, for per-node scalar visualization
-        if self.cur_overlay is not None:
-            cr.save()
-            self.perform_transformation(cr)
-            for i,value in enumerate(self.overlay_info[self.cur_overlay][1]):
-                if value != 0:
-                    cr.set_source_rgba(value,value,0.0,1.0)
-                    for seg in self.c.seg[i]:
-                        draw_segs(cr, seg)
-                    cr.fill()
-            cr.restore()
 
         self.node_attr = defaultdict(dict)
         extra_sel_flags = []
@@ -621,6 +627,16 @@ class ChipVisualizer(Gtk.Window):
             self.darea.queue_draw()
         return True
 
+    def make_screenshot(self):
+        image = cairo.ImageSurface(cairo.FORMAT_ARGB32, self.width, self.height)
+        cr = cairo.Context(image)
+        self.on_draw(None, cr)
+        image.flush()
+        fname = 'screenshot_%03i.png' % (self.screenshot_seq)
+        image.write_to_png(fname)
+        print('Wrote screenshot to %s' % fname)
+        self.screenshot_seq += 1
+
     def on_key_press(self, w, e):
         if e.state & Gdk.ModifierType.SHIFT_MASK:
             move_amount = 0.1 * MOVE_AMOUNT
@@ -674,6 +690,8 @@ class ChipVisualizer(Gtk.Window):
         if e.string == 'x': # show extra context: upstream/downstream links for selected node
             self.show_extrasel = not self.show_extrasel
             self.darea.queue_draw()
+        if e.string == 's': # screenshot
+            self.make_screenshot()
         if e.keyval == Gdk.KEY_BackSpace:
             try:
                 self.selected = self.history.pop()
@@ -699,43 +717,34 @@ class ChipVisualizer(Gtk.Window):
             self.set_sizes(e.width, e.height)
 
 def main():
+    import argparse, json
+    # Parse arguments
+    parser = argparse.ArgumentParser(description='6502 chip visualization tool')
+    parser.add_argument('datafiles', metavar='FILE', type=str, nargs='*',
+            help='Overlay data files (JSON) to load')
+    parser.add_argument('-n', '--node', dest='node', default=None, type=int,
+            help='Highlight a node at start')
+    args = parser.parse_args()
+
     c = load_circuit()
     extract_groups(c)
 
-    values = []
-    for node in c.node:
-        if node.group is not None and node.group.expr is not None:
-            expr = node.group.expr
-            cnt = expr.count()
-            value = cnt*0.1
-        else:
-            value = 0
-        values.append(value)
-
-    # Extra information layers
-    # information layers provide a scalar value per node, which can be visualized
-    # on the chip map
-    overlay_info = [
-        ('Expression complexity', values)
-    ]
-
-    import glob,json
+    # load data files
     frames = []
-    for fn in glob.glob('perfect6502/flow*.json'):
+    for fn in args.datafiles:
         try:
             with open(fn,'rb') as f:
                 d = json.load(f)
             frames.append(d)
         except ValueError:
             pass
-    frames.sort(key=operator.itemgetter('cycle'))
 
-    app = ChipVisualizer(c, overlay_info, frames)
-    #app.cur_overlay = 0
-    if len(sys.argv)>1:
-        app.selected = int(sys.argv[1])
+    frames.sort(key=lambda x:x.get('cycle',None))
+
+    app = ChipVisualizer(c, frames)
+    if args.node is not None:
+        app.selected = args.node
         app.selection_locked = True
-    #app.infobox_tab = 1
     Gtk.main()
         
 if __name__ == "__main__":    
